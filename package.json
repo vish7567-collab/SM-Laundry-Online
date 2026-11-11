@@ -1,0 +1,9 @@
+{
+  "name": "sm-laundry-online",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {"dev": "netlify dev"},
+  "dependencies": {"bcryptjs": "^2.4.3", "jsonwebtoken": "^9.0.2", "pg": "^8.13.1"},
+  "devDependencies": {"netlify-cli": "^17.37.2"}
+}
