@@ -45,7 +45,17 @@ export const handler=async event=>{
       const orders=result.rows.map(o=>{let items=o.items;if(typeof items==='string'){try{items=JSON.parse(items)}catch{items=[]}}if(!Array.isArray(items))items=[];return {...o,items,collection_entries:[],received_total:0,received_amount:0,received_date:null,instrument_type:null}});
       const payments=await client.query('SELECT id,order_id,phone,received_amount,received_date,instrument_type,created_at FROM collection ORDER BY received_date DESC,id DESC');
       const by={};for(const p of payments.rows){const k=String(p.order_id??'');(by[k]??=[]).push(p)}
-      for(const o of orders){const es=by[String(o.id)]||[];o.collection_entries=es;o.received_total=es.reduce((s,x)=>s+Number(x.received_amount),0);o.received_amount=o.received_total;o.received_date=es[0]?.received_date||null;o.instrument_type=es[0]?.instrument_type||null;}
+      for(const o of orders){
+        const es=by[String(o.id)]||[];
+        o.collection_entries=es;
+        o.received_total=es.reduce((s,x)=>s+Number(x.received_amount),0);
+        o.received_amount=o.received_total;
+        o.received_date=es[0]?.received_date||null;
+        o.instrument_type=es[0]?.instrument_type||null;
+        const payable=Number(o.amount||0)+Number(o.extraCharge||0);
+        o.payable_amount=payable;
+        o.payment_status=o.received_total>=payable-0.009?'Payment Completed':(o.received_total>0?'Part Payment':'');
+      }
       payload=orders;
     }
    } else if(event.httpMethod==='POST'){
@@ -64,23 +74,34 @@ export const handler=async event=>{
       const amount=Number(d.received_amount),date=d.received_date,mode=d.instrument_type;if(!amount||amount<=0||!validDate(date)||!['Cash','UPI'].includes(mode))return fail('Invalid collection details');
       let phone=String(d.phone||'');let orderId=d.id||null;
       if(a==='addBulkCollection'){const c=await client.query("SELECT phone FROM orders WHERE regexp_replace(coalesce(phone,''),'[^0-9]','','g')=$1 LIMIT 1",[digits(phone)]);if(!c.rowCount)return fail('ഈ ഫോൺ നമ്പറിൽ കസ്റ്റമറെ കണ്ടെത്തിയില്ല');}
-      else {const c=await client.query("SELECT phone FROM orders WHERE id=$1 AND status IN ('Completed','Delivered','Part Bill') AND COALESCE(collection,0)>0",[d.id]);if(!c.rowCount)return fail('Delivered order not found');phone=phone||c.rows[0].phone;}
-      const ins=await client.query('INSERT INTO collection(order_id,phone,received_amount,received_date,instrument_type) VALUES($1,$2,$3,$4,$5) RETURNING id',[a==='addBulkCollection'?null:orderId,phone,amount,date,mode]);payload=ok({message:'Collection saved',collection_id:ins.rows[0].id});
+      else {const c=await client.query("SELECT phone FROM orders WHERE id=$1 AND status IN ('Completed','Delivered','Part Bill','Part Payment') AND COALESCE(collection,0)>0",[d.id]);if(!c.rowCount)return fail('Delivered order not found');phone=phone||c.rows[0].phone;}
+      const ins=await client.query('INSERT INTO collection(order_id,phone,received_amount,received_date,instrument_type) VALUES($1,$2,$3,$4,$5) RETURNING id',[a==='addBulkCollection'?null:orderId,phone,amount,date,mode]);
+      let paymentStatus=null,receivedTotal=null;
+      if(a!=='addBulkCollection' && orderId){
+        const sums=await client.query(`SELECT COALESCE(SUM(received_amount),0) AS paid, COALESCE(o.amount,0)+COALESCE(o.\"extraCharge\",0) AS payable FROM orders o LEFT JOIN collection c ON c.order_id=o.id WHERE o.id=$1 GROUP BY o.id,o.amount,o.\"extraCharge\"`,[orderId]);
+        if(sums.rowCount){receivedTotal=Number(sums.rows[0].paid);const payable=Number(sums.rows[0].payable);paymentStatus=receivedTotal>=payable-0.009?'Payment Completed':'Part Payment';await client.query('UPDATE orders SET status=$1 WHERE id=$2',[paymentStatus,orderId]);}
+      }
+      payload=ok({message:'Collection saved',collection_id:ins.rows[0].id,payment_status:paymentStatus,received_total:receivedTotal});
     } else if(a==='deleteOrder'){
       await client.query('DELETE FROM orders WHERE id=$1',[d.id]);payload=ok({message:'Order Deleted'});
     } else if(a==='updateStatus'){
-      if(!['Pending','Completed'].includes(d.status))return fail('Invalid status update');const u=await client.query("UPDATE orders SET status=$1 WHERE id=$2 AND status<>'Delivered' RETURNING id",[d.status,d.id]);if(!u.rowCount)return fail('Delivered order cannot be changed or order not found');payload=ok({message:'Status Updated'});
+      if(!['Pending','Completed'].includes(d.status))return fail('Invalid status update');
+      const u=await client.query("UPDATE orders SET status=$1 WHERE id=$2 AND status NOT IN ('Delivered','Payment Completed','Part Payment') RETURNING id",[d.status,d.id]);
+      if(!u.rowCount)return fail('Payment Completed / Part Payment / Delivered ഓർഡറുകളുടെ സ്റ്റാറ്റസ് മാറ്റാൻ കഴിയില്ല');
+      payload=ok({message:'Status Updated'});
     } else if(a==='updateDelivery'){
-      const u=await client.query(d.delivered?`UPDATE orders SET collection=COALESCE(amount,0)+COALESCE("extraCharge",0),status='Delivered' WHERE id=$1`:`UPDATE orders SET collection=0 WHERE id=$1`,[d.id]);payload=ok({message:'Delivery saved',id:d.id,delivered:!!d.delivered});
+      const u=await client.query(d.delivered?`UPDATE orders SET collection=COALESCE(amount,0)+COALESCE("extraCharge",0),status='Delivered' WHERE id=$1 AND status NOT IN ('Payment Completed','Part Payment')`:`UPDATE orders SET collection=0 WHERE id=$1`,[d.id]);
+      if(d.delivered && !u.rowCount)return fail('Payment Completed / Part Payment ഓർഡറുകളുടെ സ്റ്റാറ്റസ് മാറ്റാൻ കഴിയില്ല');
+      payload=ok({message:'Delivery saved',id:d.id,delivered:!!d.delivered});
     } else if(a==='updateDeliveryCollection'){
-      let updated=0;await client.query('BEGIN');try{for(const x of d.updates||[]){const u=await client.query(`UPDATE orders SET collection=CASE WHEN $1 THEN ROUND(COALESCE(amount,0)+COALESCE("extraCharge",0),2) ELSE 0 END,status=CASE WHEN $1 THEN 'Delivered' ELSE status END WHERE id=$2 AND status IN ('Completed','Delivered')`,[!!x.delivered,x.id]);updated+=u.rowCount;}await client.query('COMMIT')}catch(e){await client.query('ROLLBACK');throw e}payload=ok({message:'Delivery വിവരങ്ങൾ വിജയകരമായി സേവ് ചെയ്തു',updated});
+      let updated=0;await client.query('BEGIN');try{for(const x of d.updates||[]){const u=await client.query(`UPDATE orders SET collection=CASE WHEN $1 THEN ROUND(COALESCE(amount,0)+COALESCE("extraCharge",0),2) ELSE 0 END,status=CASE WHEN $1 THEN 'Delivered' ELSE status END WHERE id=$2 AND status IN ('Completed','Delivered') AND status NOT IN ('Payment Completed','Part Payment')`,[!!x.delivered,x.id]);updated+=u.rowCount;}await client.query('COMMIT')}catch(e){await client.query('ROLLBACK');throw e}payload=ok({message:'Delivery വിവരങ്ങൾ വിജയകരമായി സേവ് ചെയ്തു',updated});
     } else if(a==='updateCollection'){
       await client.query('UPDATE orders SET collection=$1 WHERE id=$2',[Number(d.collection||0),d.id]);payload=ok({message:'Collection updated'});
     } else {
       // Save or edit order (the frontend submits the complete order object).
       const vals=[String(d.id||''),d.date||null,d.isoDate||null,d.time||null,d.name||null,d.phone||null,Number(d.count||0),d.service||null,JSON.stringify(d.items||[]),Number(d.extraCharge||0),String(d.details??d.detail??''),Number(d.amount||0),d.status||'Pending'];
       if(!vals[0])return fail('Order ID is required');
-      await client.query(`INSERT INTO orders(id,"date","isoDate","time",name,phone,"count",service,items,"extraCharge",details,amount,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT(id) DO UPDATE SET "date"=EXCLUDED."date","isoDate"=EXCLUDED."isoDate","time"=EXCLUDED."time",name=EXCLUDED.name,phone=EXCLUDED.phone,"count"=EXCLUDED."count",service=EXCLUDED.service,items=EXCLUDED.items,"extraCharge"=EXCLUDED."extraCharge",details=EXCLUDED.details,amount=EXCLUDED.amount,status=EXCLUDED.status`,vals);payload=ok();
+      await client.query(`INSERT INTO orders(id,"date","isoDate","time",name,phone,"count",service,items,"extraCharge",details,amount,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT(id) DO UPDATE SET "date"=EXCLUDED."date","isoDate"=EXCLUDED."isoDate","time"=EXCLUDED."time",name=EXCLUDED.name,phone=EXCLUDED.phone,"count"=EXCLUDED."count",service=EXCLUDED.service,items=EXCLUDED.items,"extraCharge"=EXCLUDED."extraCharge",details=EXCLUDED.details,amount=EXCLUDED.amount,status=CASE WHEN orders.status IN ('Payment Completed','Part Payment') THEN orders.status ELSE EXCLUDED.status END`,vals);payload=ok();
     }
    } else return fail('Method not allowed',405);
    const renewed=jwt.sign({sub:session.sub},process.env.JWT_SECRET,{expiresIn:'10m'});
