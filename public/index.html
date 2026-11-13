@@ -3323,29 +3323,39 @@ body.delivery-screen #rateSettingsSection{
             }
         }
 
+        let _ratesLoadPromise = null;
         async function loadRatesFromDb(serviceType = null) {
-            const services = serviceType ? [serviceType] : ['Steam Ironing', 'Laundry', 'Washing and Ironing'];
-            for (const service of services) {
-                const response = await fetch(
-                    API_URL + '?action=listRates&service_type=' + encodeURIComponent(service),
-                    {cache:'no-store', headers:{'Accept':'application/json'}}
-                );
+            // One unfiltered request loads every service rate in a single round trip.
+            // Concurrent callers share the same in-flight request.
+            if (!serviceType && _ratesLoadPromise) return _ratesLoadPromise;
+            const load = async () => {
+                const url = API_URL + '?action=listRates' + (serviceType ? '&service_type=' + encodeURIComponent(serviceType) : '');
+                const response = await fetch(url, {cache:'no-store', headers:{'Accept':'application/json'}});
                 const raw = await response.text();
                 if (!response.ok) throw new Error(`Rate API HTTP ${response.status}`);
                 let data;
                 try { data = JSON.parse(raw); }
                 catch (_) { throw new Error('Rate API did not return JSON'); }
-                if (!data || data.result !== 'success') {
-                    throw new Error(data?.message || 'Rate data unavailable');
-                }
-                const rates = {};
+                if (!data || data.result !== 'success') throw new Error(data?.message || 'Rate data unavailable');
+                const grouped = {};
                 (data.records || []).forEach(row => {
-                    rates[String(row.item_name)] = Number(row.rate) || 0;
+                    const service = String(row.service_type || serviceType || '');
+                    if (!grouped[service]) grouped[service] = {};
+                    grouped[service][String(row.item_name)] = Number(row.rate) || 0;
                 });
-                RATE_CHART[service] = rates;
-                RATES_LOADED_FROM_DB[service] = true;
-            }
-            return RATE_CHART;
+                Object.keys(grouped).forEach(service => {
+                    RATE_CHART[service] = grouped[service];
+                    RATES_LOADED_FROM_DB[service] = true;
+                });
+                if (serviceType && !grouped[serviceType]) {
+                    RATE_CHART[serviceType] = {};
+                    RATES_LOADED_FROM_DB[serviceType] = true;
+                }
+                return RATE_CHART;
+            };
+            if (serviceType) return load();
+            _ratesLoadPromise = load().finally(() => { _ratesLoadPromise = null; });
+            return _ratesLoadPromise;
         }
 
         const RATE_STORAGE_KEY = 'sm_laundry_rate_chart_v1';
@@ -3368,10 +3378,20 @@ body.delivery-screen #rateSettingsSection{
         let billPendingCurrentPage = 1;
         const billPendingRowsPerPage = 10;
 
-        document.addEventListener('DOMContentLoaded', async () => {
+        document.addEventListener('DOMContentLoaded', () => {
             syncNewEntryServiceOptions();
-            await loadRatesFromDb();
-            loadOrdersFromDb();
+            // Dashboard orders and rate master load concurrently instead of serially.
+            // Orders are not blocked by the rate master request.
+            const startupTasks = [
+                loadOrdersFromDb(),
+                loadRatesFromDb().catch(err => {
+                    console.error('Rates startup load failed:', err);
+                    showToast('റേറ്റുകൾ ലഭ്യമാക്കാൻ കഴിഞ്ഞില്ല: ' + err.message, 'error');
+                })
+            ];
+            Promise.allSettled(startupTasks).then(() => {
+                document.documentElement.dataset.appReady = 'true';
+            });
         });
 
 

@@ -7,7 +7,7 @@ export async function onRequest(context) {
       const token = readCookie(request);
       if (!token) return json({result:'error',message:'Session expired'},401);
       // A lightweight authenticated request also refreshes the GAS 10-minute inactivity timer.
-      const check = await gasGet({action:'listRates', token});
+      const check = await gasGet({action:'sessionCheck', token});
       if (check.data?.result === 'error') return json({result:'error',message:check.data.message || 'Session expired'},401,{'Set-Cookie':sessionCookie('',0)});
       return json({result:'success'},200,{'Set-Cookie':sessionCookie(token)});
     }
