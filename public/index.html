@@ -3305,7 +3305,8 @@ body.delivery-screen #rateSettingsSection{
                 return;
             }
             try {
-                for (const service of services) await loadRatesFromDb(service);
+                // Fetch the complete rate master once; never issue serial per-service requests.
+                await loadRatesFromDb();
                 const options = [...new Set(services.flatMap(service => Object.keys(RATE_CHART[service] || {})))].sort((a, b) => a.localeCompare(b, undefined, {sensitivity:'base'}));
                 const rows = Array.from(document.querySelectorAll('#itemRowsContainer > div'));
                 for (const row of rows) {
@@ -3324,13 +3325,16 @@ body.delivery-screen #rateSettingsSection{
         }
 
         let _ratesLoadPromise = null;
+        let _allRatesLoaded = false;
         async function loadRatesFromDb(serviceType = null) {
-            // One unfiltered request loads every service rate in a single round trip.
-            // Concurrent callers share the same in-flight request.
-            if (!serviceType && _ratesLoadPromise) return _ratesLoadPromise;
-            const load = async () => {
-                const url = API_URL + '?action=listRates' + (serviceType ? '&service_type=' + encodeURIComponent(serviceType) : '');
-                const response = await fetch(url, {cache:'no-store', headers:{'Accept':'application/json'}});
+            // A single shared request loads every service category. The serviceType
+            // argument is retained for compatibility with existing callers.
+            if (_allRatesLoaded) return RATE_CHART;
+            if (_ratesLoadPromise) return _ratesLoadPromise;
+            _ratesLoadPromise = (async () => {
+                const response = await fetch(API_URL + '?action=listRates', {
+                    cache: 'no-store', headers: { 'Accept': 'application/json' }
+                });
                 const raw = await response.text();
                 if (!response.ok) throw new Error(`Rate API HTTP ${response.status}`);
                 let data;
@@ -3339,7 +3343,7 @@ body.delivery-screen #rateSettingsSection{
                 if (!data || data.result !== 'success') throw new Error(data?.message || 'Rate data unavailable');
                 const grouped = {};
                 (data.records || []).forEach(row => {
-                    const service = String(row.service_type || serviceType || '');
+                    const service = String(row.service_type || '');
                     if (!grouped[service]) grouped[service] = {};
                     grouped[service][String(row.item_name)] = Number(row.rate) || 0;
                 });
@@ -3347,14 +3351,9 @@ body.delivery-screen #rateSettingsSection{
                     RATE_CHART[service] = grouped[service];
                     RATES_LOADED_FROM_DB[service] = true;
                 });
-                if (serviceType && !grouped[serviceType]) {
-                    RATE_CHART[serviceType] = {};
-                    RATES_LOADED_FROM_DB[serviceType] = true;
-                }
+                _allRatesLoaded = true;
                 return RATE_CHART;
-            };
-            if (serviceType) return load();
-            _ratesLoadPromise = load().finally(() => { _ratesLoadPromise = null; });
+            })().finally(() => { _ratesLoadPromise = null; });
             return _ratesLoadPromise;
         }
 
@@ -4275,7 +4274,7 @@ async function renderRateSettings() {
             }
 
             try {
-                for (const service of services) await loadRatesFromDb(service);
+                await loadRatesFromDb();
             } catch (err) {
                 showToast(`റേറ്റുകൾ ലഭ്യമാക്കാൻ കഴിഞ്ഞില്ല: ${err.message}`, 'error');
                 return;
@@ -4328,7 +4327,7 @@ async function renderRateSettings() {
             const services = getSelectedServiceTypes();
             if (!services.length) return;
             try {
-                for (const service of services) await loadRatesFromDb(service);
+                await loadRatesFromDb();
             } catch (err) {
                 showToast(`റേറ്റുകൾ ലഭ്യമാക്കാൻ കഴിഞ്ഞില്ല: ${err.message}`, 'error');
                 return;
@@ -4389,7 +4388,7 @@ async function renderRateSettings() {
             const container = document.getElementById('editItemRowsContainer');
             if (!services.length) { container.innerHTML = ''; calculateEditTotals(); return; }
             try {
-                for (const service of services) await loadRatesFromDb(service);
+                await loadRatesFromDb();
                 const options = [...new Set(services.flatMap(service => Object.keys(RATE_CHART[service] || {})))].sort((a,b) => a.localeCompare(b, undefined, {sensitivity:'base'}));
                 const rows = Array.from(container.querySelectorAll('.edit-item-row'));
                 rows.forEach(row => {
@@ -4409,7 +4408,7 @@ async function renderRateSettings() {
             if (!container) return;
             const services = getSelectedEditServiceTypes();
             if (!services.length) { showToast('ആദ്യം സർവീസ് തരം തിരഞ്ഞെടുക്കുക','warning'); return; }
-            for (const service of services) await loadRatesFromDb(service);
+            await loadRatesFromDb();
             const itemOptions = [...new Set(services.flatMap(service => Object.keys(RATE_CHART[service] || {})))].sort((a,b) => a.localeCompare(b, undefined, {sensitivity:'base'}));
             if (!itemOptions.length) { showToast('തിരഞ്ഞെടുത്ത സർവീസിന് റേറ്റുകൾ ലഭ്യമല്ല','warning'); return; }
             const rowId = 'e' + Date.now() + Math.floor(Math.random() * 1000);
@@ -4491,7 +4490,7 @@ async function renderRateSettings() {
             }
             if (!items.length) items = [{name:null, qty:parseInt(order.count)||1, rate:0}];
             try {
-                for (const service of savedServices) await loadRatesFromDb(service);
+                await loadRatesFromDb();
                 for (const item of items) await addEditItemRow(item.name || null, parseInt(item.qty)||1, item.rate != null ? parseFloat(item.rate)||0 : null);
                 calculateEditTotals();
                 if (!Array.isArray(order.items) || !order.items.length) document.getElementById('editAmount').value = parseFloat(order.amount)||0;
@@ -4547,12 +4546,28 @@ async function renderRateSettings() {
             document.getElementById('formHeaderText').innerText = "പുതിയ എൻട്രി ചേർക്കുക";
             document.getElementById('formHeaderIcon').className = "fa-solid fa-plus-circle text-blue-600";
             document.getElementById('submitBtnText').innerText = "സേവ് ചെയ്യുക & ബിൽ കാണുക";
+            document.getElementById('submitBtn').disabled = false;
+            document.getElementById('submitBtnIcon').className = 'fa-solid fa-save';
             document.getElementById('submitBtn').className = "w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl shadow-lg transition flex items-center justify-center gap-2";
             document.getElementById('cancelEditBtn').classList.add('hidden');
         }
 
+        let _orderSaveInProgress = false;
+        function setOrderSaveProgress(active, message = 'സേവ് ചെയ്യുന്നു...') {
+            const btn = document.getElementById('submitBtn');
+            const icon = document.getElementById('submitBtnIcon');
+            const label = document.getElementById('submitBtnText');
+            if (!btn || !icon || !label) return;
+            btn.disabled = !!active;
+            btn.style.opacity = active ? '.78' : '';
+            btn.style.cursor = active ? 'wait' : '';
+            icon.className = active ? 'fa-solid fa-circle-notch fa-spin' : 'fa-solid fa-save';
+            label.textContent = active ? message : 'സേവ് ചെയ്യുക & ബിൽ കാണുക';
+        }
+
         async function handleFormSubmit(e) {
             e.preventDefault();
+            if (_orderSaveInProgress) return;
             const editingId = document.getElementById('editingOrderId').value;
             const itemsList = [];
             let totalItemsCount = 0;
@@ -4615,6 +4630,8 @@ async function renderRateSettings() {
             };
 
             // Order save/edit സമയത്ത് amount + extraCharge രണ്ടും database-ലേക്ക് save ചെയ്യണം.
+            _orderSaveInProgress = true;
+            setOrderSaveProgress(true, 'സേവ് ചെയ്യുന്നു...');
             try {
                 const saveResponse = await fetch(API_URL, {
                     method: 'POST',
@@ -4623,13 +4640,26 @@ async function renderRateSettings() {
                 });
                 const saveResult = await saveResponse.json();
                 if (!saveResponse.ok || saveResult.result !== 'success') throw new Error(saveResult.message || 'Order save failed');
-                await loadOrdersFromDb();
-
-                // Database amount 0 ആയാലും, customer bill-ൽ യഥാർത്ഥ തുക കാണിക്കും.
+                // Do not block bill generation on a second full Orders download.
+                // Optimistically update the in-memory list, then reconcile in background.
+                if (!editingId) {
+                    orders.unshift({...payload, collection:0, received_total:0, received_amount:0, collection_entries:[]});
+                    proFilteredOrders = orders.slice();
+                    if (typeof renderOrdersFromList === 'function') renderOrdersFromList(orders);
+                    updateDashboard();
+                }
                 generateCustomerBill(payload);
                 resetFormState();
+                setOrderSaveProgress(false);
+                _orderSaveInProgress = false;
+                // Background refresh keeps server truth without delaying the user-facing save.
+                loadOrdersFromDb().catch(err => console.warn('Background order refresh failed:', err));
+                if (editingId) showToast('ഓർഡർ അപ്ഡേറ്റ് ചെയ്തു', 'success');
             } catch (err) {
-                alert("ഡാറ്റാബേസിൽ സേവ് ചെയ്യാൻ സാധിച്ചില്ല!");
+                console.error('Order save failed:', err);
+                showToast('ഡാറ്റാബേസിൽ സേവ് ചെയ്യാൻ സാധിച്ചില്ല: ' + (err.message || ''), 'error');
+                setOrderSaveProgress(false);
+                _orderSaveInProgress = false;
             }
         }
 
