@@ -4668,8 +4668,7 @@ async function renderRateSettings() {
         async function toggleStatus(id) {
             const order = orders.find(o => String(o.id) === String(id));
             if(!order) return;
-            if (String(order.status || '').toLowerCase() === 'delivered') { showToast('Delivered ഓർഡറിന്റെ സ്റ്റാറ്റസ് മാറ്റാൻ കഴിയില്ല', 'warning'); return; }
-            if (isPaymentFinalStatus(order.status)) { showToast('Payment Completed / Part Payment ഓർഡറുകളുടെ സ്റ്റാറ്റസ് മാറ്റാൻ കഴിയില്ല', 'warning'); return; }
+            if (isStatusLocked(order.status)) { showToast('Delivered / Part Bill / Payment Completed ഓർഡറുകളുടെ സ്റ്റാറ്റസ് മാറ്റാൻ കഴിയില്ല', 'warning'); return; }
 
             const markCompleted = window.confirm(`Order #${id} completed?\n\nOK = COMPLETED\nCancel = PENDING`);
             const newStatus = markCompleted ? 'Completed' : 'Pending';
@@ -5015,7 +5014,10 @@ async function renderRateSettings() {
         }
 
         function isPaymentFinalStatus(status){
-            return ['payment completed','part payment'].includes(String(status||'').trim().toLowerCase());
+            return ['payment completed','part payment','part bill'].includes(String(status||'').trim().toLowerCase());
+        }
+        function isStatusLocked(status){
+            return ['delivered','part bill','part payment','payment completed'].includes(String(status||'').trim().toLowerCase());
         }
         function togglePaidOrdersVisibility(show){
             showPaidOrders=!!show;
@@ -5093,7 +5095,7 @@ async function renderRateSettings() {
                         <td class="p-3"><div class="font-semibold">${order.name||''}</div><div class="text-xs text-gray-400">${order.phone||''}</div></td>
                         <td class="p-3 font-semibold">${order.count||0} എണ്ണം</td>
                         <td class="p-3 font-semibold">₹${order.amount||0}</td>
-                        <td class="p-3"><span ${isPaymentFinalStatus(order.status)?'title="Payment status is automatically managed and locked"':'onclick="toggleStatus(\''+String(order.id).replace(/\'/g,"\\'")+ '\')"'} class="${isPaymentFinalStatus(order.status)?'cursor-not-allowed':'cursor-pointer'} px-2.5 py-1 text-xs font-semibold rounded-full ${order.status==='Payment Completed'?'bg-emerald-100 text-emerald-800':order.status==='Part Payment'?'bg-orange-100 text-orange-800':order.status==='Completed'?'bg-green-100 text-green-700':'bg-amber-100 text-amber-700'}">${escapeHtml(order.status||'Pending')}</span></td>
+                        <td class="p-3"><span ${isStatusLocked(order.status)?'title="This order status is locked"':'onclick="toggleStatus(\''+String(order.id).replace(/\'/g,"\\'")+ '\')"'} class="${isStatusLocked(order.status)?'cursor-not-allowed':'cursor-pointer'} px-2.5 py-1 text-xs font-semibold rounded-full ${order.status==='Payment Completed'?'bg-emerald-100 text-emerald-800':(['Part Payment','Part Bill'].includes(order.status))?'bg-orange-100 text-orange-800':order.status==='Delivered'?'bg-sky-100 text-sky-800':order.status==='Completed'?'bg-green-100 text-green-700':'bg-amber-100 text-amber-700'}">${escapeHtml(order.status||'Pending')}</span></td>
                         <td class="p-3 text-center space-x-2">
                             <button onclick="editOrder('${order.id}')" class="text-amber-600 hover:text-amber-800" title="എഡിറ്റ് ചെയ്യുക"><i class="fa-solid fa-pen-to-square"></i></button>
                             <button onclick="generateCustomerBillById('${order.id}')" class="text-emerald-600 hover:text-emerald-800" title="Half A4 ബിൽ പ്രിന്റ് ചെയ്യുക"><i class="fa-solid fa-file-invoice"></i></button>
