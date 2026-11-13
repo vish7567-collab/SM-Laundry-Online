@@ -12,19 +12,40 @@ export function sessionCookie(token, age=600) {
 export function json(data, status=200, headers={}) {
   return Response.json(data, {status, headers:{'Cache-Control':'no-store', ...headers}});
 }
+function parseGasResponse(response, text, method) {
+  try {
+    return {httpStatus: response.status, data: JSON.parse(text)};
+  } catch {
+    const contentType = response.headers.get('content-type') || 'unknown';
+    let finalUrl = 'unknown';
+    try {
+      const u = new URL(response.url);
+      finalUrl = u.hostname + u.pathname;
+    } catch {}
+    // Keep only a short diagnostic excerpt; do not expose cookies or request payloads.
+    const preview = String(text || '').replace(/\s+/g, ' ').slice(0, 260);
+    const message = [
+      `Google Apps Script returned non-JSON response (HTTP ${response.status}).`,
+      `Method: ${method}.`,
+      `Content-Type: ${contentType}.`,
+      `Final URL: ${finalUrl}.`,
+      `Response preview: ${preview || '[empty response]'}`,
+      'Check that the Apps Script Web App is deployed as Execute as: Me and Who has access: Anyone; then deploy a New version.'
+    ].join(' ');
+    throw new Error(message);
+  }
+}
 export async function gasGet(params) {
   const url = new URL(GAS_URL);
   for (const [k,v] of Object.entries(params)) if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
   const response = await fetch(url.toString(), {redirect:'follow', headers:{'Accept':'application/json'}});
   const text = await response.text();
-  try { return {httpStatus:response.status, data:JSON.parse(text)}; }
-  catch { throw new Error(`Google Apps Script returned non-JSON response (HTTP ${response.status}). Check Web App deployment access.`); }
+  return parseGasResponse(response, text, 'GET');
 }
 export async function gasPost(payload) {
   const response = await fetch(GAS_URL, {method:'POST', redirect:'follow', headers:{'Content-Type':'text/plain;charset=utf-8','Accept':'application/json'}, body:JSON.stringify(payload)});
   const text = await response.text();
-  try { return {httpStatus:response.status, data:JSON.parse(text)}; }
-  catch { throw new Error(`Google Apps Script returned non-JSON response (HTTP ${response.status}). Check Web App deployment access.`); }
+  return parseGasResponse(response, text, 'POST');
 }
 export function errorResponse(error) {
   console.error('Google Sheets API proxy:', error);
