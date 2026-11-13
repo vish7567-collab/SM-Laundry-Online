@@ -2858,7 +2858,7 @@ body.delivery-screen #rateSettingsSection{
                     <button type="button" onclick="navigateMenu('dashboard')" class="delivery-back">
                         <i class="fa-solid fa-arrow-left mr-1"></i> Back to Dashboard
                     </button>
-                    <button type="button" onclick="saveDeliveryCollection()" class="delivery-save">
+                    <button type="button" id="saveDeliveryBtn" onclick="saveDeliveryCollection()" class="delivery-save">
                         <i class="fa-solid fa-floppy-disk mr-1"></i> Save
                     </button>
                 </div>
@@ -4935,60 +4935,80 @@ async function renderRateSettings() {
             renderDeliveryList();
         }
 
-        async function saveDeliveryCollection(){
-            const rows=[...document.querySelectorAll('#deliveryTableBody .delivery-check')];
+        let _deliverySaveInProgress = false;
 
-            if(!rows.length){
-                showToast('ഡെലിവറി ലിസ്റ്റിൽ സേവ് ചെയ്യാനുള്ള റെക്കോർഡുകൾ ഒന്നുമില്ല', 'warning');
+        async function saveDeliveryCollection(){
+            if(_deliverySaveInProgress) return;
+            const button=document.getElementById('saveDeliveryBtn');
+            const checkboxes=[...document.querySelectorAll('#deliveryTableBody .delivery-check')];
+
+            if(!checkboxes.length){
+                showToast('ഡെലിവറി ലിസ്റ്റിൽ സേവ് ചെയ്യാനുള്ള റെക്കോർഡുകളില്ല', 'warning');
                 return;
             }
 
-            // Every Completed record is saved:
-            // checked   -> collection = amount + extraCharge
-            // unchecked -> collection = 0
-            const updates=rows.map(cb=>{
+            const updates=checkboxes.map(cb=>{
                 const order=orders.find(o=>String(o.id)===String(cb.dataset.id));
-                if(!order) return null;
-
-                return {
-                    id: order.id,
-                    delivered: cb.checked
-                };
+                return order ? {id:String(order.id), delivered:!!cb.checked} : null;
             }).filter(Boolean);
 
-            const deliveredCount=updates.filter(x=>x.delivered).length;
-            const pendingDeliveryCount=updates.length-deliveredCount;
+            if(!updates.length){
+                showToast('അപ്ഡേറ്റ് ചെയ്യാനുള്ള ഓർഡറുകൾ കണ്ടെത്തിയില്ല', 'warning');
+                return;
+            }
+
+            const originalButtonHTML=button ? button.innerHTML : '';
+            _deliverySaveInProgress=true;
+            if(button){
+                button.disabled=true;
+                button.style.opacity='0.7';
+                button.style.cursor='wait';
+                button.innerHTML='<i class="fa-solid fa-circle-notch fa-spin mr-1"></i> Saving Delivery...';
+            }
 
             try{
                 const response=await fetch(API_URL,{
                     method:'POST',
                     headers:{'Content-Type':'application/json'},
-                    body:JSON.stringify({
-                        action:'updateDeliveryCollection',
-                        updates
-                    })
+                    body:JSON.stringify({action:'updateDeliveryCollection',updates})
                 });
-
                 const result=await response.json();
-
-                if(result.result!=='success'){
-                    throw new Error(result.message||'Save failed');
+                if(!response.ok || result.result!=='success'){
+                    throw new Error(result.message||'Delivery save failed');
                 }
 
-                await loadOrdersFromDb();
+                // Update the in-memory dataset immediately; do not download all Orders again.
+                const updateMap=new Map(updates.map(x=>[String(x.id),x]));
+                orders=orders.map(order=>{
+                    const u=updateMap.get(String(order.id));
+                    if(!u) return order;
+                    const total=(Number(order.amount)||0)+(Number(order.extraCharge)||0);
+                    return {...order, collection:u.delivered?total:0, status:u.delivered?'Delivered':order.status};
+                });
+                if(Array.isArray(proFilteredOrders)){
+                    proFilteredOrders=proFilteredOrders.map(order=>{
+                        const u=updateMap.get(String(order.id));
+                        if(!u) return order;
+                        const total=(Number(order.amount)||0)+(Number(order.extraCharge)||0);
+                        return {...order, collection:u.delivered?total:0, status:u.delivered?'Delivered':order.status};
+                    });
+                }
                 renderDeliveryList();
+                if(typeof updateDashboard==='function') updateDashboard();
 
-                showToast(
-                    `Delivery വിവരങ്ങൾ സേവ് ചെയ്തു • ${deliveredCount} delivered • ${pendingDeliveryCount} pending`,
-                    'success'
-                );
-
+                const deliveredCount=updates.filter(x=>x.delivered).length;
+                showToast(`ഡെലിവറി സേവ് ചെയ്തു • ${deliveredCount} Delivered • ${updates.length-deliveredCount} Pending`, 'success');
             }catch(err){
                 console.error('Delivery Save Error:',err);
-                showToast(
-                    'Delivery വിവരങ്ങൾ സേവ് ചെയ്യാൻ കഴിഞ്ഞില്ല',
-                    'error'
-                );
+                showToast(err.message||'Delivery വിവരങ്ങൾ സേവ് ചെയ്യാൻ കഴിഞ്ഞില്ല','error');
+            }finally{
+                _deliverySaveInProgress=false;
+                if(button){
+                    button.disabled=false;
+                    button.style.opacity='';
+                    button.style.cursor='';
+                    button.innerHTML=originalButtonHTML;
+                }
             }
         }
 
