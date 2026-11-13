@@ -4471,6 +4471,10 @@ async function renderRateSettings() {
         async function editOrder(id) {
             const order = orders.find(o => String(o.id) === String(id));
             if (!order) return;
+            if (isStatusLocked(order.status)) {
+                showToast('Delivered / Part Bill / Part Payment / Payment Completed ഓർഡറുകൾ തിരുത്താൻ കഴിയില്ല', 'warning');
+                return;
+            }
             document.getElementById('editOrderId').value = order.id || '';
             document.getElementById('editModalTitle').textContent = `ഓർഡർ തിരുത്തുക — ${order.id || ''}`;
             document.getElementById('editCustomerName').value = order.name || '';
@@ -4509,6 +4513,11 @@ async function renderRateSettings() {
             const id = document.getElementById('editOrderId').value;
             const existing = orders.find(o => String(o.id) === String(id));
             if (!existing) return;
+            if (isStatusLocked(existing.status)) {
+                closeEditOrderModal();
+                showToast('ഈ സ്റ്റാറ്റസിലുള്ള ഓർഡറുകൾ തിരുത്താൻ കഴിയില്ല', 'warning');
+                return;
+            }
             const items = collectEditItems();
             const extraCharge = parseFloat(document.getElementById('editExtraCharge').value) || 0;
             const amount = parseFloat(document.getElementById('editAmount').value) || 0;
@@ -5097,7 +5106,7 @@ async function renderRateSettings() {
                         <td class="p-3 font-semibold">₹${order.amount||0}</td>
                         <td class="p-3"><span ${isStatusLocked(order.status)?'title="This order status is locked"':'onclick="toggleStatus(\''+String(order.id).replace(/\'/g,"\\'")+ '\')"'} class="${isStatusLocked(order.status)?'cursor-not-allowed':'cursor-pointer'} px-2.5 py-1 text-xs font-semibold rounded-full ${order.status==='Payment Completed'?'bg-emerald-100 text-emerald-800':(['Part Payment','Part Bill'].includes(order.status))?'bg-orange-100 text-orange-800':order.status==='Delivered'?'bg-sky-100 text-sky-800':order.status==='Completed'?'bg-green-100 text-green-700':'bg-amber-100 text-amber-700'}">${escapeHtml(order.status||'Pending')}</span></td>
                         <td class="p-3 text-center space-x-2">
-                            <button onclick="editOrder('${order.id}')" class="text-amber-600 hover:text-amber-800" title="എഡിറ്റ് ചെയ്യുക"><i class="fa-solid fa-pen-to-square"></i></button>
+                            ${isStatusLocked(order.status)?'<button type="button" class="text-slate-300 cursor-not-allowed" title="ഈ ഓർഡർ തിരുത്താൻ കഴിയില്ല" disabled><i class="fa-solid fa-lock"></i></button>':'<button onclick="editOrder(\''+String(order.id).replaceAll("'","&#39;")+'\')" class="text-amber-600 hover:text-amber-800" title="എഡിറ്റ് ചെയ്യുക"><i class="fa-solid fa-pen-to-square"></i></button>'}
                             <button onclick="generateCustomerBillById('${order.id}')" class="text-emerald-600 hover:text-emerald-800" title="Half A4 ബിൽ പ്രിന്റ് ചെയ്യുക"><i class="fa-solid fa-file-invoice"></i></button>
                             <button onclick="printOrder('${order.id}')" class="text-blue-600 hover:text-blue-800" title="തെർമൽ സ്ലിപ്പ് പ്രിന്റ് ചെയ്യുക"><i class="fa-solid fa-print"></i></button>
                         </td>`;
@@ -5350,7 +5359,7 @@ async function renderRateSettings() {
                     <div class="font-bold text-slate-700">${order.date||order.isoDate||'-'}</div>
                 </div>
                 <div class="flex flex-wrap gap-2 mt-5">
-                    <button type="button" onclick="closeOrderDetails();editOrder('${String(order.id).replace(/'/g,"\\'")}')" class="px-4 py-2.5 rounded-xl bg-amber-500 text-white text-sm font-bold"><i class="fa-solid fa-pen mr-1"></i>Edit</button>
+                    ${isStatusLocked(order.status)?'<span class="px-4 py-2.5 rounded-xl bg-slate-100 text-slate-400 text-sm font-bold"><i class="fa-solid fa-lock mr-1"></i>Editing Locked</span>':`<button type="button" onclick="closeOrderDetails();editOrder('${String(order.id).replaceAll("'","&#39;")}')" class="px-4 py-2.5 rounded-xl bg-amber-500 text-white text-sm font-bold"><i class="fa-solid fa-pen mr-1"></i>Edit</button>`}
                     <button type="button" onclick="closeOrderDetails();generateCustomerBillById('${String(order.id).replace(/'/g,"\\'")}')" class="px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-bold"><i class="fa-solid fa-file-invoice mr-1"></i>Bill</button>
                     <button type="button" onclick="closeOrderDetails();printOrder('${String(order.id).replace(/'/g,"\\'")}')" class="px-4 py-2.5 rounded-xl bg-blue-600 text-white text-sm font-bold"><i class="fa-solid fa-print mr-1"></i>Print</button>
                 </div>`;
