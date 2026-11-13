@@ -4669,40 +4669,38 @@ async function renderRateSettings() {
             if (String(order.status || '').toLowerCase() === 'delivered') { showToast('Delivered ഓർഡറിന്റെ സ്റ്റാറ്റസ് മാറ്റാൻ കഴിയില്ല', 'warning'); return; }
             if (isPaymentFinalStatus(order.status)) { showToast('Payment Completed / Part Payment ഓർഡറുകളുടെ സ്റ്റാറ്റസ് മാറ്റാൻ കഴിയില്ല', 'warning'); return; }
 
-            // സ്റ്റാറ്റസ് ക്ലിക്ക് ചെയ്യുമ്പോൾ ഉപയോക്താവിനോട് വ്യക്തമായി തിരഞ്ഞെടുക്കാൻ ചോദിക്കുക.
-            const markCompleted = window.confirm(
-                `Order #${id} completed?\n\nOK = COMPLETED\nCancel = PENDING`
-            );
+            const markCompleted = window.confirm(`Order #${id} completed?\n\nOK = COMPLETED\nCancel = PENDING`);
             const newStatus = markCompleted ? 'Completed' : 'Pending';
             if (order.status === newStatus) return;
-
-            // Status മാറ്റുമ്പോൾ amount/extraCharge മാറ്റരുത്.
-            // Pending ആണെങ്കിൽ collection നിർബന്ധമായും 0 ആയിരിക്കണം.
-            const statusPayload = {
-                action: 'updateStatus',
-                id: id,
-                status: newStatus
-            };
+            if (order._statusUpdating) return;
+            order._statusUpdating = true;
+            showToast('സ്റ്റാറ്റസ് അപ്ഡേറ്റ് ചെയ്യുന്നു...', 'info');
 
             try {
                 const response = await fetch(API_URL, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(statusPayload)
+                    body: JSON.stringify({ action: 'updateStatus', id: id, status: newStatus })
                 });
                 const result = await response.json().catch(() => ({}));
-                if (result.success === false || result.result === 'error') {
-                    throw new Error(result.message || 'Status update failed');
+                if (!response.ok || result.result !== 'success') {
+                    throw new Error(result.message || `HTTP ${response.status}: Status update failed`);
                 }
 
-                await loadOrdersFromDb();
-                if (document.getElementById('deliverySection') && !document.getElementById('deliverySection').classList.contains('hidden')) {
-                    renderDeliveryList();
-                }
+                // Update the in-memory record immediately; do not reload the entire Orders sheet.
+                order.status = newStatus;
+                delete order._statusUpdating;
+                proFilteredOrders = Array.isArray(proFilteredOrders)
+                    ? proFilteredOrders.map(o => String(o.id) === String(id) ? {...o, status:newStatus} : o)
+                    : orders.slice();
+                if (typeof renderOrdersFromList === 'function') renderOrdersFromList(orders);
+                if (document.getElementById('deliverySection') && !document.getElementById('deliverySection').classList.contains('hidden')) renderDeliveryList();
                 updateDashboard();
+                showToast('ഓർഡർ സ്റ്റാറ്റസ് അപ്ഡേറ്റ് ചെയ്തു', 'success');
             } catch (err) {
+                delete order._statusUpdating;
                 console.error('Status update error:', err);
-                showToast('Status update ചെയ്യാൻ കഴിഞ്ഞില്ല', 'error');
+                showToast('Status update ചെയ്യാൻ കഴിഞ്ഞില്ല: ' + (err.message || ''), 'error');
             }
         }
 
