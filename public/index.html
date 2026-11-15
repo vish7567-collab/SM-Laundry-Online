@@ -4649,8 +4649,47 @@ async function renderRateSettings() {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
                 });
-                const saveResult = await saveResponse.json();
-                if (!saveResponse.ok || saveResult.result !== 'success') throw new Error(saveResult.message || 'Order save failed');
+                // Read as text first: Apps Script may occasionally return an HTML
+                // platform/interstitial page even when the write has already completed.
+                const saveRaw = await saveResponse.text();
+                let saveResult = null;
+                try {
+                    saveResult = JSON.parse(saveRaw);
+                } catch (parseError) {
+                    saveResult = null;
+                }
+
+                if (!saveResponse.ok || !saveResult || saveResult.result !== 'success') {
+                    // Never repeat the POST here: it could create a duplicate order.
+                    // Verify the generated Order ID with a read-only GET instead.
+                    let verifiedOrder = null;
+                    try {
+                        const verifyResponse = await fetch(API_URL, {
+                            method: 'GET',
+                            cache: 'no-store',
+                            headers: { 'Accept': 'application/json' }
+                        });
+                        const verifyRaw = await verifyResponse.text();
+                        if (verifyResponse.ok) {
+                            const verifyData = JSON.parse(verifyRaw);
+                            if (Array.isArray(verifyData)) {
+                                verifiedOrder = verifyData.find(o => String(o.id) === String(payload.id)) || null;
+                            }
+                        }
+                    } catch (verifyError) {
+                        console.warn('Order save verification failed:', verifyError);
+                    }
+
+                    if (!verifiedOrder) {
+                        const preview = String(saveRaw || '').replace(/\s+/g, ' ').slice(0, 220);
+                        throw new Error(saveResult?.message || `Save response പരിശോധിക്കാനായില്ല; ഓർഡർ നില സ്ഥിരീകരിക്കാനായില്ല. ${preview}`);
+                    }
+
+                    // The order is confirmed in Sheets. Continue with the bill,
+                    // using the saved record, without sending another save request.
+                    Object.assign(payload, verifiedOrder);
+                    showToast('ഓർഡർ ഡാറ്റാബേസിൽ സേവ് ചെയ്തിട്ടുണ്ട്. ബിൽ തയ്യാറാക്കുന്നു...', 'success');
+                }
                 // Do not block bill generation on a second full Orders download.
                 // Optimistically update the in-memory list, then reconcile in background.
                 if (!editingId) {
