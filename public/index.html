@@ -2931,7 +2931,7 @@ body.delivery-screen #rateSettingsSection{
         <button type="button" onclick="loadOrdersFromDb().then(renderBillPendingReport)" class="px-4 py-2.5 rounded-xl bg-white border border-slate-200 text-slate-700 font-bold shadow-sm"><i class="fa-solid fa-rotate mr-1"></i> Refresh</button>
     </div>
     <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-        <div class="p-4 border-b flex flex-wrap items-center justify-between gap-3"><div><div class="font-extrabold text-slate-800">ബാക്കി തുകയുള്ള ഓർഡറുകൾ</div><div id="billPendingSummary" class="text-xs text-slate-500 mt-1">0 റെക്കോർഡുകൾ</div></div><div class="text-right"><div class="text-xs text-slate-500">ആകെ ബാക്കി തുക</div><div id="billPendingTotal" class="text-xl font-extrabold text-rose-600">₹0.00</div></div></div>
+        <div class="p-4 border-b flex flex-wrap items-center justify-between gap-3"><div><div class="font-extrabold text-slate-800">Delivered സ്റ്റാറ്റസിലുള്ള ബാക്കി തുകയുള്ള ഓർഡറുകൾ</div><div id="billPendingSummary" class="text-xs text-slate-500 mt-1">0 റെക്കോർഡുകൾ</div></div><div class="text-right"><div class="text-xs text-slate-500">ആകെ ബാക്കി തുക</div><div id="billPendingTotal" class="text-xl font-extrabold text-rose-600">₹0.00</div></div></div>
         <div class="p-4 border-b flex flex-wrap gap-2"><input id="billPendingQuickSearch" type="search" placeholder="Order ID / പേര് / ഫോൺ നമ്പർ തിരയുക" class="flex-1 min-w-[220px] rounded-xl border border-slate-300 px-4 py-2.5" onkeydown="if(event.key==='Enter') applyBillPendingQuickSearch()"><button type="button" onclick="applyBillPendingQuickSearch()" class="px-5 py-2.5 rounded-xl bg-indigo-600 text-white font-bold"><i class="fa-solid fa-magnifying-glass mr-1"></i>Search</button></div>
         <div class="overflow-x-auto"><table class="w-full text-left"><thead class="bg-slate-50 text-xs text-slate-600"><tr><th class="p-3">ഓർഡർ തീയതി</th><th class="p-3">ഓർഡർ ID</th><th class="p-3">കസ്റ്റമർ</th><th class="p-3">ഫോൺ</th><th class="p-3">ബിൽ തുക</th><th class="p-3">ലഭിച്ച തുക</th><th class="p-3">ബാക്കി തുക</th><th class="p-3">ആക്ഷൻ</th></tr></thead><tbody id="billPendingTableBody" class="text-sm"></tbody></table></div>
         <div class="p-4 border-t flex flex-wrap items-center justify-between gap-3"><span id="billPendingPaginationInfo" class="text-sm text-slate-500">പേജ് 1 / 1</span><div class="flex gap-2"><button id="billPendingPrevBtn" type="button" onclick="changeBillPendingPage(-1)" class="px-4 py-2 rounded-lg border font-bold">മുൻപത്തേത്</button><button id="billPendingNextBtn" type="button" onclick="changeBillPendingPage(1)" class="px-4 py-2 rounded-lg border font-bold">അടുത്തത്</button></div></div>
@@ -4946,9 +4946,12 @@ async function renderRateSettings() {
             const tbody=document.getElementById('billPendingTableBody'); if(!tbody)return;
             const rows=(Array.isArray(orders)?orders:[]).map(o=>{
                 const bill=(parseFloat(o.amount)||0)+(parseFloat(o.extraCharge)||0);
-                const paid=parseFloat(o.received_amount)||0;
+                // Prefer the aggregate received total from Collections; retain
+                // compatibility with older order records using received_amount/collection.
+                const paidRaw = o.received_total ?? o.received_amount ?? o.collection ?? 0;
+                const paid = Math.max(0, parseFloat(paidRaw)||0);
                 return {...o,billAmount:bill,paidAmount:paid,balance:Math.max(0,bill-paid)};
-            }).filter(o=>String(o.status||'').trim().toLowerCase()==='part bill' && o.balance>0.009)
+            }).filter(o=>String(o.status||'').trim().toLowerCase()==='delivered' && o.balance>0.009)
               .filter(o=>!billPendingSearchQuery || [o.id,o.name,o.phone].some(v=>String(v||'').toLowerCase().includes(billPendingSearchQuery)))
               .sort((a,b)=>String(b.isoDate||b.date||'').localeCompare(String(a.isoDate||a.date||'')));
             const total=rows.reduce((sum,o)=>sum+o.balance,0);
@@ -4960,7 +4963,7 @@ async function renderRateSettings() {
             const info=document.getElementById('billPendingPaginationInfo'); if(info)info.textContent=`പേജ് ${billPendingCurrentPage} / ${totalPages} • ${rows.length} റെക്കോർഡുകൾ`;
             const prev=document.getElementById('billPendingPrevBtn'),next=document.getElementById('billPendingNextBtn');
             if(prev)prev.disabled=billPendingCurrentPage<=1;if(next)next.disabled=billPendingCurrentPage>=totalPages;
-            if(!rows.length){tbody.innerHTML='<tr><td colspan="8" class="p-10 text-center text-slate-400">ബിൽ തുക നൽകാൻ ബാക്കിയുള്ള ഓർഡറുകളില്ല</td></tr>';return;}
+            if(!rows.length){tbody.innerHTML='<tr><td colspan="8" class="p-10 text-center text-slate-400">പൂർണ്ണ തുക കളക്ഷൻ ലഭിക്കാത്ത Delivered ഓർഡറുകളില്ല</td></tr>';return;}
             const formatPendingDate=value=>{if(!value)return '-';const raw=String(value).trim();let d;if(/^\d{4}-\d{2}-\d{2}/.test(raw)){const [y,m,day]=raw.slice(0,10).split('-');return `${day}/${m}/${y}`;}const match=raw.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);if(match)return `${match[1].padStart(2,'0')}/${match[2].padStart(2,'0')}/${match[3]}`;d=new Date(raw);return Number.isNaN(d.getTime())?raw:`${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;};
             tbody.innerHTML=pageRows.map(o=>`<tr class="border-t border-slate-100 hover:bg-slate-50"><td class="p-3 whitespace-nowrap">${escapeHtml(formatPendingDate(o.isoDate||o.date))}</td><td class="p-3 font-mono font-bold text-indigo-700">${escapeHtml(String(o.id||''))}</td><td class="p-3 font-bold">${escapeHtml(o.name||'-')}</td><td class="p-3">${escapeHtml(o.phone||'-')}</td><td class="p-3">₹${o.billAmount.toFixed(2)}</td><td class="p-3">₹${o.paidAmount.toFixed(2)}</td><td class="p-3 font-extrabold text-rose-600">₹${o.balance.toFixed(2)}</td><td class="p-3"><button type="button" onclick="viewBillOnly('${String(o.id).replace(/'/g, "\\'")}')" class="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700"><i class="fa-solid fa-eye mr-1"></i>View</button></td></tr>`).join('');
         }
