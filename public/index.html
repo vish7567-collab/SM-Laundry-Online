@@ -3127,7 +3127,12 @@ body.delivery-screen #rateSettingsSection{
 
 <!-- EDIT ORDER POPUP — SAME UI AS NEW REGISTRATION -->
 <div id="editOrderModal" class="edit-order-backdrop" onclick="if(event.target===this)closeEditOrderModal()">
-  <div class="edit-order-modal edit-registration-modal">
+  <div class="edit-order-modal edit-registration-modal" style="position:relative">
+    <div id="editOrderLoading" class="hidden absolute inset-0 z-30 rounded-2xl bg-white/90 backdrop-blur-sm flex flex-col items-center justify-center gap-3">
+      <i class="fa-solid fa-circle-notch fa-spin text-4xl text-blue-600"></i>
+      <div id="editOrderLoadingText" class="font-extrabold text-slate-700">ഓർഡർ വിവരങ്ങൾ ലോഡ് ചെയ്യുന്നു...</div>
+      <div class="text-xs text-slate-500">ദയവായി കാത്തിരിക്കുക</div>
+    </div>
     <div class="edit-registration-head">
       <div class="flex items-center gap-3">
         <span class="edit-reg-icon"><i class="fa-solid fa-pen-to-square"></i></span>
@@ -3191,8 +3196,8 @@ body.delivery-screen #rateSettingsSection{
         <button type="button" onclick="closeEditOrderModal()" class="px-5 py-3 rounded-xl bg-slate-100 text-slate-700 font-extrabold hover:bg-slate-200">
           <i class="fa-solid fa-xmark mr-1"></i> റദ്ദാക്കുക
         </button>
-        <button type="submit" class="px-6 py-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-extrabold shadow-lg">
-          <i class="fa-solid fa-floppy-disk mr-1"></i> മാറ്റങ്ങൾ സേവ് ചെയ്യുക
+        <button id="editOrderSaveBtn" type="submit" class="px-6 py-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-extrabold shadow-lg">
+          <i id="editOrderSaveIcon" class="fa-solid fa-floppy-disk mr-1"></i> <span id="editOrderSaveText">മാറ്റങ്ങൾ സേവ് ചെയ്യുക</span>
         </button>
       </div>
     </form>
@@ -4475,32 +4480,44 @@ async function renderRateSettings() {
                 showToast('Delivered / Part Bill / Part Payment / Payment Completed ഓർഡറുകൾ തിരുത്താൻ കഴിയില്ല', 'warning');
                 return;
             }
-            document.getElementById('editOrderId').value = order.id || '';
-            document.getElementById('editModalTitle').textContent = `ഓർഡർ തിരുത്തുക — ${order.id || ''}`;
-            document.getElementById('editCustomerName').value = order.name || '';
-            document.getElementById('editCustomerPhone').value = order.phone || '';
-            document.querySelectorAll('#editServiceTypeOptions .edit-service-checkbox').forEach(input => input.checked = false);
-            const savedServices = parseStoredEditServices(order.service);
-            savedServices.forEach(service => { const input = document.querySelector(`#editServiceTypeOptions .edit-service-checkbox[value="${service}"]`); if (input) input.checked = true; });
-            document.getElementById('editExtraCharge').value = parseFloat(order.extraCharge) || 0;
-            document.getElementById('editAmount').value = parseFloat(order.amount) || 0;
-            document.getElementById('editStatusDisplay').textContent = order.status || 'Pending';
-            const container = document.getElementById('editItemRowsContainer');
-            container.innerHTML = '';
-            let items = Array.isArray(order.items) ? order.items : [];
-            if (!items.length && order.details) {
-                const parts = String(order.details).split(',').map(x => x.trim()).filter(Boolean);
-                items = parts.map(x => ({name:x.replace(/\s*\(\d+\)\s*$/,''), qty:parseInt((x.match(/\((\d+)\)/)||[])[1])||1, rate:0}));
-            }
-            if (!items.length) items = [{name:null, qty:parseInt(order.count)||1, rate:0}];
+            const modal = document.getElementById('editOrderModal');
+            const loading = document.getElementById('editOrderLoading');
+            const form = document.getElementById('editOrderForm');
+            if (modal) modal.style.display = 'flex';
+            if (loading) loading.classList.remove('hidden');
+            if (form) form.style.visibility = 'hidden';
+            document.body.classList.add('overflow-hidden');
             try {
+                document.getElementById('editOrderId').value = order.id || '';
+                document.getElementById('editModalTitle').textContent = `ഓർഡർ തിരുത്തുക — ${order.id || ''}`;
+                document.getElementById('editCustomerName').value = order.name || '';
+                document.getElementById('editCustomerPhone').value = order.phone || '';
+                document.querySelectorAll('#editServiceTypeOptions .edit-service-checkbox').forEach(input => input.checked = false);
+                const savedServices = parseStoredEditServices(order.service);
+                savedServices.forEach(service => { const input = document.querySelector(`#editServiceTypeOptions .edit-service-checkbox[value="${service}"]`); if (input) input.checked = true; });
+                document.getElementById('editExtraCharge').value = parseFloat(order.extraCharge) || 0;
+                document.getElementById('editAmount').value = parseFloat(order.amount) || 0;
+                document.getElementById('editStatusDisplay').textContent = order.status || 'Pending';
+                const container = document.getElementById('editItemRowsContainer');
+                container.innerHTML = '';
+                let items = Array.isArray(order.items) ? order.items : [];
+                if (!items.length && order.details) {
+                    const parts = String(order.details).split(',').map(x => x.trim()).filter(Boolean);
+                    items = parts.map(x => ({name:x.replace(/\s*\(\d+\)\s*$/,''), qty:parseInt((x.match(/\((\d+)\)/)||[])[1])||1, rate:0}));
+                }
+                if (!items.length) items = [{name:null, qty:parseInt(order.count)||1, rate:0}];
                 await loadRatesFromDb();
                 for (const item of items) await addEditItemRow(item.name || null, parseInt(item.qty)||1, item.rate != null ? parseFloat(item.rate)||0 : null);
                 calculateEditTotals();
                 if (!Array.isArray(order.items) || !order.items.length) document.getElementById('editAmount').value = parseFloat(order.amount)||0;
-                document.getElementById('editOrderModal').style.display = 'flex';
-                document.body.classList.add('overflow-hidden');
-            } catch (err) { console.error('Edit order load error:',err); showToast('ഓർഡർ വിവരങ്ങൾ ലോഡ് ചെയ്യാൻ കഴിഞ്ഞില്ല','error'); }
+            } catch (err) {
+                console.error('Edit order load error:',err);
+                showToast('ഓർഡർ വിവരങ്ങൾ ലോഡ് ചെയ്യാൻ കഴിഞ്ഞില്ല','error');
+                closeEditOrderModal();
+            } finally {
+                if (loading) loading.classList.add('hidden');
+                if (form) form.style.visibility = 'visible';
+            }
         }
 
         function closeEditOrderModal() {
@@ -4509,20 +4526,39 @@ async function renderRateSettings() {
             document.body.classList.remove('overflow-hidden');
         }
 
-        function parseStoredEditItems(value) {
-            if (Array.isArray(value)) return value;
-            try { return JSON.parse(value || '[]'); } catch (e) { return []; }
+        let _editOrderSaving = false;
+        function setEditOrderSaving(active) {
+            const btn=document.getElementById('editOrderSaveBtn');
+            const icon=document.getElementById('editOrderSaveIcon');
+            const label=document.getElementById('editOrderSaveText');
+            if(btn) btn.disabled=!!active;
+            if(icon) icon.className=active?'fa-solid fa-circle-notch fa-spin mr-1':'fa-solid fa-floppy-disk mr-1';
+            if(label) label.textContent=active?'അപ്ഡേറ്റ് ചെയ്യുന്നു...':'മാറ്റങ്ങൾ സേവ് ചെയ്യുക';
         }
+        async function confirmOrderWrite(id, expected) {
+            // GAS may commit the write but return Google's HTML interstitial instead of JSON.
+            // Verify the persisted row through the normal authenticated GET endpoint.
+            const response=await fetch(API_URL,{method:'GET',cache:'no-store',headers:{'Accept':'application/json'}});
+            const raw=await response.text();
+            if(!response.ok) throw new Error('ഡാറ്റാബേസ് സ്ഥിരീകരിക്കാൻ കഴിഞ്ഞില്ല (HTTP '+response.status+')');
+            const list=JSON.parse(raw);
+            if(!Array.isArray(list)) throw new Error('ഓർഡർ ലിസ്റ്റ് ലഭിച്ചില്ല');
+            const saved=list.find(o=>String(o.id)===String(id));
+            if(!saved) return false;
+            return Object.entries(expected).every(([key,value])=>{
+                if(key==='items') return JSON.stringify(parseItemsForCompare(saved.items))===JSON.stringify(parseItemsForCompare(value));
+                if(['amount','extraCharge','count'].includes(key)) return Math.abs(Number(saved[key]||0)-Number(value||0))<0.001;
+                return String(saved[key]??'')===String(value??'');
+            });
+        }
+        function parseItemsForCompare(value){ if(Array.isArray(value)) return value; try{return JSON.parse(value||'[]')}catch(e){return[]} }
 
         async function saveEditedOrder() {
+            if(_editOrderSaving) return;
             const id = document.getElementById('editOrderId').value;
             const existing = orders.find(o => String(o.id) === String(id));
             if (!existing) return;
-            if (isStatusLocked(existing.status)) {
-                closeEditOrderModal();
-                showToast('ഈ സ്റ്റാറ്റസിലുള്ള ഓർഡറുകൾ തിരുത്താൻ കഴിയില്ല', 'warning');
-                return;
-            }
+            if (isStatusLocked(existing.status)) { closeEditOrderModal(); showToast('ഈ സ്റ്റാറ്റസിലുള്ള ഓർഡറുകൾ തിരുത്താൻ കഴിയില്ല', 'warning'); return; }
             const items = collectEditItems();
             const extraCharge = parseFloat(document.getElementById('editExtraCharge').value) || 0;
             const amount = parseFloat(document.getElementById('editAmount').value) || 0;
@@ -4532,48 +4568,40 @@ async function renderRateSettings() {
                 action:'editOrder', id,
                 isoDate:normalizeOrderIsoDate(existing.isoDate || existing.date) || getLocalYmd(),
                 date:(()=>{const v=normalizeOrderIsoDate(existing.isoDate || existing.date) || getLocalYmd();const [y,m,d]=v.split('-');return `${d}/${m}/${y}`;})(),
-                time:normalizeOrderTime(existing.time) || new Intl.DateTimeFormat('en-GB',{hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).format(new Date()),
+                time:normalizeOrderTime(existing.time),
                 name:document.getElementById('editCustomerName').value.trim(), phone:document.getElementById('editCustomerPhone').value.trim(),
                 count:totalCount || parseInt(existing.count)||0, service:getServiceDisplayName(getSelectedEditServiceTypes()),
                 items, extraCharge, details, amount, status:existing.status || 'Pending'
             };
             if (!getSelectedEditServiceTypes().length) { showToast('സർവീസ് തരം തിരഞ്ഞെടുക്കുക','warning'); return; }
             if (!payload.name) { showToast('കസ്റ്റമറുടെ പേര് നൽകുക', 'warning'); return; }
+            _editOrderSaving=true; setEditOrderSaving(true);
             try {
-                const response = await fetch(API_URL,{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify(payload)});
-                const raw = await response.text();
-                let result = null;
-                try { result = JSON.parse(raw); } catch(parseErr) { console.warn('Edit response was not JSON; verifying saved order from database.', raw.slice(0,300)); }
-
-                // Apps Script may occasionally complete the Sheet update but return an HTML
-                // platform/redirect page instead of JSON. Confirm the write with a fresh GET
-                // before showing an error or asking the user to save again.
-                let confirmed = !!(response.ok && result && result.result === 'success');
-                if (!confirmed) {
-                    const verifyResponse = await fetch(API_URL,{method:'GET',cache:'no-store',headers:{'Accept':'application/json'}});
-                    const verifyRaw = await verifyResponse.text();
-                    if (verifyResponse.ok) {
-                        try {
-                            const savedOrders = JSON.parse(verifyRaw);
-                            if (Array.isArray(savedOrders)) {
-                                const saved = savedOrders.find(o => String(o.id) === String(payload.id));
-                                const same = saved &&
-                                    String(saved.name||'').trim() === payload.name &&
-                                    String(saved.phone||'').trim() === payload.phone &&
-                                    Math.abs(Number(saved.amount||0)-Number(payload.amount||0)) < 0.01 &&
-                                    Math.abs(Number(saved.extraCharge||0)-Number(payload.extraCharge||0)) < 0.01 &&
-                                    String(saved.service||'') === String(payload.service||'') &&
-                                    JSON.stringify(parseStoredEditItems(saved.items)) === JSON.stringify(payload.items);
-                                if (same) confirmed = true;
-                            }
-                        } catch(verifyErr) { console.error('Edit verification response parse failed:',verifyErr); }
-                    }
+                let writeConfirmed=false, responseError=null;
+                try {
+                    const response=await fetch(API_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+                    const raw=await response.text();
+                    const result=JSON.parse(raw);
+                    if(response.ok && result.result==='success') writeConfirmed=true;
+                    else responseError=new Error(result.message||'Update failed');
+                } catch(err) { responseError=err; }
+                if(!writeConfirmed) {
+                    const verified=await confirmOrderWrite(id,{id,name:payload.name,phone:payload.phone,count:payload.count,service:payload.service,items:payload.items,extraCharge:payload.extraCharge,details:payload.details,amount:payload.amount});
+                    if(!verified) throw responseError || new Error('അപ്ഡേറ്റ് ഡാറ്റാബേസിൽ സ്ഥിരീകരിച്ചില്ല');
                 }
-                if (!confirmed) throw new Error((result && result.message) || `Update could not be confirmed (HTTP ${response.status}).`);
+                // Update UI immediately; refresh server data without delaying the confirmation.
+                const idx=orders.findIndex(o=>String(o.id)===String(id));
+                if(idx>=0) orders[idx]={...orders[idx],...payload};
+                proFilteredOrders=orders.slice();
+                if(typeof renderOrdersFromList==='function') renderOrdersFromList(orders);
+                updateDashboard();
                 closeEditOrderModal();
-                await loadOrdersFromDb();
                 showToast('ഓർഡർ വിവരങ്ങൾ വിജയകരമായി അപ്ഡേറ്റ് ചെയ്തു','success');
-            } catch(err) { console.error('Edit Order Error:',err); showToast('ഓർഡർ അപ്ഡേറ്റ് ചെയ്യാൻ കഴിഞ്ഞില്ല. വീണ്ടും ശ്രമിക്കുന്നതിന് മുമ്പ് ഓർഡർ ലിസ്റ്റ് പുതുക്കി പരിശോധിക്കുക.','error'); }
+                loadOrdersFromDb().catch(err=>console.warn('Background order refresh failed:',err));
+            } catch(err) {
+                console.error('Edit Order Error:',err);
+                showToast('ഓർഡർ അപ്ഡേറ്റ് ചെയ്യാൻ കഴിഞ്ഞില്ല: '+(err.message||''),'error');
+            } finally { _editOrderSaving=false; setEditOrderSaving(false); }
         }
 
         function resetFormState() {
@@ -4683,8 +4711,19 @@ async function renderRateSettings() {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
                 });
-                const saveResult = await saveResponse.json();
-                if (!saveResponse.ok || saveResult.result !== 'success') throw new Error(saveResult.message || 'Order save failed');
+                let saveResult=null, saveResponseError=null;
+                try {
+                    const raw=await saveResponse.text();
+                    saveResult=JSON.parse(raw);
+                    if (!saveResponse.ok || saveResult.result !== 'success') saveResponseError=new Error(saveResult.message || 'Order save failed');
+                } catch(parseErr) { saveResponseError=parseErr; }
+                if (saveResponseError) {
+                    // The sheet write can succeed even when Google returns an HTML response.
+                    // Verify by the generated ID; never submit the same order a second time.
+                    const verified=await confirmOrderWrite(payload.id,{id:payload.id,name:payload.name,phone:payload.phone,count:payload.count,service:payload.service,items:payload.items,extraCharge:payload.extraCharge,details:payload.details,amount:payload.amount});
+                    if (!verified) throw saveResponseError;
+                    saveResult={result:'success',id:payload.id,verified:true};
+                }
                 // Do not block bill generation on a second full Orders download.
                 // Optimistically update the in-memory list, then reconcile in background.
                 if (!editingId) {
